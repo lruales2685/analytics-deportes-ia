@@ -4,3 +4,4 @@ nba_api
 google-genai
 requests
 openpyxl
+plotly

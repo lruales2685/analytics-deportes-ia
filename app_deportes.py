@@ -61,103 +61,176 @@ tab_nba, tab_futbol, tab_tenis, tab_vivo = st.tabs([
     "⚡ Cartelera & Cuotas en Vivo"
 ])
 with tab_nba:
-    st.subheader("Reporte Estadístico NBA y Comparador de Líneas")
-    
+    import plotly.graph_objects as go
+    from nba_api.stats.endpoints import commonplayerinfo
+
+    st.subheader("🏀 Análisis Gráfico Avanzado NBA")
+
     todos_jugadores = players.get_active_players()
     nombres = sorted([j['full_name'] for j in todos_jugadores])
-    
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        seleccionado = st.selectbox("Busca o selecciona un jugador:", nombres, index=nombres.index("Stephen Curry"))
-    with col2:
-        ultimos_n = st.slider("Muestra reciente (partidos):", min_value=3, max_value=30, value=10)
+    idx_def = nombres.index("Herbert Jones") if "Herbert Jones" in nombres else nombres.index("Stephen Curry")
 
-    # Panel para conectar las líneas de las casas de apuestas
-    st.markdown("#### 🎯 Líneas del Próximo Partido (Opcional)")
-    l1, l2, l3, l4 = st.columns(4)
-    linea_pts = l1.number_input("Línea Puntos (PTS)", min_value=0.0, value=24.5, step=0.5)
-    linea_reb = l2.number_input("Línea Rebotes (REB)", min_value=0.0, value=4.5, step=0.5)
-    linea_ast = l3.number_input("Línea Asistencias (AST)", min_value=0.0, value=4.5, step=0.5)
-    linea_fg3 = l4.number_input("Línea Triples (FG3M)", min_value=0.0, value=3.5, step=0.5)
+    col_sel1, col_sel2, col_sel3 = st.columns([2, 1, 1])
+    with col_sel1:
+        seleccionado = st.selectbox("Jugador NBA:", nombres, index=idx_def)
+    with col_sel2:
+        mercado_sel = st.selectbox("Estadística / Mercado:", [
+            "Puntos (PTS)", "Asistencias (AST)", "Rebotes (REB)", 
+            "Triples (3PM)", "PRA (P+R+A)", "P+R (PTS+REB)", "Robos (STL)"
+        ])
+    with col_sel3:
+        linea_eval = st.number_input("Línea a evaluar:", min_value=0.5, value=1.5 if "Asistencias" in mercado_sel else 14.5, step=0.5)
 
-    if st.button("Generar Reporte Completo", type="primary"):
-        with st.spinner(f"Descargando historial completo de {seleccionado}..."):
-            info_jugador = [j for j in todos_jugadores if j['full_name'] == seleccionado][0]
-            historial = playergamelog.PlayerGameLog(player_id=info_jugador['id'])
-            tabla = historial.get_data_frames()[0]
-            
-            if tabla.empty:
-                st.warning("Este jugador aún no registra partidos en la temporada actual.")
-            else:
-                # Creamos columna combinada PRA (Puntos + Rebotes + Asistencias)
-                tabla['PRA'] = tabla['PTS'] + tabla['REB'] + tabla['AST']
-                recientes = tabla.head(ultimos_n)
-                
-                # 1. Tarjetas de Promedios vs. Línea
-                st.markdown(f"### 📈 Promedios (Últimos {len(recientes)} partidos) vs. Línea")
-                m1, m2, m3, m4, m5 = st.columns(5)
-                m1.metric("Puntos", f"{recientes['PTS'].mean():.1f}", delta=f"{recientes['PTS'].mean() - linea_pts:+.1f} vs línea")
-                m2.metric("Rebotes", f"{recientes['REB'].mean():.1f}", delta=f"{recientes['REB'].mean() - linea_reb:+.1f} vs línea")
-                m3.metric("Asistencias", f"{recientes['AST'].mean():.1f}", delta=f"{recientes['AST'].mean() - linea_ast:+.1f} vs línea")
-                m4.metric("Triples", f"{recientes['FG3M'].mean():.1f}", delta=f"{recientes['FG3M'].mean() - linea_fg3:+.1f} vs línea")
-                m5.metric("Minutos (MIN)", f"{recientes['MIN'].mean():.1f}")
+    # Descargamos información e historial del jugador con caché
+    info_jugador = [j for j in todos_jugadores if j['full_name'] == seleccionado][0]
+    pid = info_jugador['id']
 
-                # 2. Tabla de Frecuencia de Superación (Hit Rate Over)
-                st.markdown("### 🎲 Frecuencia de Superación de Línea (Over %)")
-                def calc_hit(serie, linea):
-                    return f"{(serie > linea).mean() * 100:.0f}% ({int((serie > linea).sum())}/{len(serie)})"
+    @st.cache_data(ttl=3600)
+    def obtener_datos_completos_nba(player_id):
+        log = playergamelog.PlayerGameLog(player_id=player_id, timeout=15)
+        df = log.get_data_frames()[0]
+        try:
+            info = commonplayerinfo.CommonPlayerInfo(player_id=player_id, timeout=10).get_data_frames()[0]
+            equipo = f"{info['TEAM_CITY'].iloc[0]} {info['TEAM_NAME'].iloc[0]}"
+            pos = info['POSITION'].iloc[0]
+        except Exception:
+            equipo, pos = "NBA", ""
+        return df, equipo, pos
 
-                resumen_lineas = pd.DataFrame({
-                    "Estadística": ["Puntos (PTS)", "Rebotes (REB)", "Asistencias (AST)", "Triples (FG3M)"],
-                    "Línea Evaluada": [linea_pts, linea_reb, linea_ast, linea_fg3],
-                    f"Over Últimos {len(recientes)}": [
-                        calc_hit(recientes['PTS'], linea_pts),
-                        calc_hit(recientes['REB'], linea_reb),
-                        calc_hit(recientes['AST'], linea_ast),
-                        calc_hit(recientes['FG3M'], linea_fg3)
-                    ],
-                    f"Over Temporada ({len(tabla)} PJ)": [
-                        calc_hit(tabla['PTS'], linea_pts),
-                        calc_hit(tabla['REB'], linea_reb),
-                        calc_hit(tabla['AST'], linea_ast),
-                        calc_hit(tabla['FG3M'], linea_fg3)
-                    ],
-                    "Mediana Reciente": [
-                        recientes['PTS'].median(),
-                        recientes['REB'].median(),
-                        recientes['AST'].median(),
-                        recientes['FG3M'].median()
-                    ],
-                    "Mín / Máx Reciente": [
-                        f"{recientes['PTS'].min()} - {recientes['PTS'].max()}",
-                        f"{recientes['REB'].min()} - {recientes['REB'].max()}",
-                        f"{recientes['AST'].min()} - {recientes['AST'].max()}",
-                        f"{recientes['FG3M'].min()} - {recientes['FG3M'].max()}"
-                    ]
-                })
-                st.dataframe(resumen_lineas, use_container_width=True, hide_index=True)
+    with st.spinner(f"Cargando perfil gráfico de {seleccionado}..."):
+        df_nba, equipo_jug, pos_jug = obtener_datos_completos_nba(pid)
 
-                # 3. Rendimiento Local vs. Visitante
-                st.markdown("### 🏟️ Rendimiento Local vs. Visitante (Temporada)")
-                tabla['Condición'] = tabla['MATCHUP'].apply(lambda x: 'Visitante (@)' if '@' in x else 'Local (vs.)')
-                split_loc = tabla.groupby('Condición')[['MIN', 'PTS', 'REB', 'AST', 'FG3M', 'PRA']].mean().round(1)
-                st.dataframe(split_loc, use_container_width=True)
+    if df_nba.empty:
+        st.warning("Este jugador aún no registra partidos en la temporada 2026-27.")
+    else:
+        # Calculamos columnas combinadas
+        df_nba['PRA'] = df_nba['PTS'] + df_nba['REB'] + df_nba['AST']
+        df_nba['P+R'] = df_nba['PTS'] + df_nba['REB']
+        df_nba['Rival'] = df_nba['MATCHUP'].apply(lambda x: x.split()[-1])
+        df_nba['Condicion'] = df_nba['MATCHUP'].apply(lambda x: 'Visitante' if '@' in x else 'Local')
 
-                # 4. Historial Detallado Partido a Partido
-                st.markdown("### 📋 Registro Detallado de Partidos")
-                cols_detalle = ['GAME_DATE', 'MATCHUP', 'WL', 'MIN', 'PTS', 'REB', 'AST', 'FG3M', 'FG3A', 'FGA', 'PRA']
-                st.dataframe(recientes[cols_detalle], use_container_width=True, hide_index=True)
+        mapa_cols = {
+            "Puntos (PTS)": "PTS",
+            "Asistencias (AST)": "AST",
+            "Rebotes (REB)": "REB",
+            "Triples (3PM)": "FG3M",
+            "PRA (P+R+A)": "PRA",
+            "P+R (PTS+REB)": "P+R",
+            "Robos (STL)": "STL"
+        }
+        col_activa = mapa_cols[mercado_sel]
 
-                # 5. Análisis Objetivo con IA Blindada
-                st.markdown("### 🤖 Síntesis Estadística IA")
-                prompt = (
-                    f"Actúa como analista estadístico deportivo objetivo. Resume en 4 viñetas breves el rendimiento de {seleccionado} "
-                    f"comparando sus últimos {len(recientes)} partidos y su temporada completa ({len(tabla)} PJ) frente a estas líneas: "
-                    f"PTS {linea_pts}, REB {linea_reb}, AST {linea_ast}, Triples {linea_fg3}.\n"
-                    f"Tabla de hit rates:\n{resumen_lineas.to_string(index=False)}\n"
-                    f"Local vs Visitante:\n{split_loc.to_string()}"
-                )
-                st.info(consultar_ia_segura(prompt))
+        # 1. TARJETA DE ENCABEZADO (Foto oficial + Equipo + Línea)
+        c_foto, c_datos = st.columns([1, 4])
+        with c_foto:
+            url_foto = f"https://nba.com{pid}.png"
+            st.image(url_foto, width=110)
+        with c_datos:
+            st.markdown(f"### **{seleccionado}**")
+            st.caption(f"{pos_jug} • **{equipo_jug}** | Línea evaluada: **Over {linea_eval} {mercado_sel}**")
+
+        # 2. FILTROS INTERACTIVOS DEL GRÁFICO (Como la barra inferior de la imagen)
+        st.markdown("##### 🎛️ Filtros del Gráfico")
+        f_col1, f_col2, f_col3, f_col4 = st.columns(4)
+        with f_col1:
+            tramo_grafico = st.selectbox("Tramo visual:", ["Últimos 10 (L10)", "Últimos 5 (L5)", "Últimos 20 (L20)", "Toda la Temporada"])
+        with f_col2:
+            filtro_loc = st.selectbox("Localía:", ["Todos", "Local", "Visitante"])
+        with f_col3:
+            min_minutos = st.slider("Mínimo de Minutos:", 0, 40, 0)
+        with f_col4:
+            rivales_disp = ["Todos"] + sorted(df_nba['Rival'].unique().tolist())
+            filtro_rival = st.selectbox("Duelo vs. Rival (H2H):", rivales_disp)
+
+        # Aplicamos filtros al DataFrame
+        df_filtrado = df_nba.copy()
+        if filtro_loc != "Todos":
+            df_filtrado = df_filtrado[df_filtrado['Condicion'] == filtro_loc]
+        if min_minutos > 0:
+            df_filtrado = df_filtrado[df_filtrado['MIN'] >= min_minutos]
+        if filtro_rival != "Todos":
+            df_filtrado = df_filtrado[df_filtrado['Rival'] == filtro_rival]
+
+        n_limite = {"Últimos 10 (L10)": 10, "Últimos 5 (L5)": 5, "Últimos 20 (L20)": 20, "Toda la Temporada": len(df_filtrado)}[tramo_grafico]
+        df_plot = df_filtrado.head(n_limite).iloc[::-1]  # Invertimos para orden cronológico de izquierda a derecha
+
+        if df_plot.empty:
+            st.info("No hay partidos que cumplan con esa combinación de filtros.")
+        else:
+            # 3. TARJETAS SUPERIORES (Proyección, Acertó %, Minutos, Tiros)
+            prom_actual = df_plot[col_activa].mean()
+            aciertos = (df_plot[col_activa] > linea_eval).sum()
+            total_muestra = len(df_plot)
+            porc_acierto = (aciertos / total_muestra) * 100
+
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("PROYECCIÓN (PROM)", f"{prom_actual:.1f}", delta=f"{prom_actual - linea_eval:+.1f} vs línea")
+            k2.metric("ACERTÓ", f"{porc_acierto:.0f}%", delta=f"{aciertos} de {total_muestra} partidos")
+            k3.metric("MINUTOS PROM.", f"{df_plot['MIN'].mean():.1f}")
+            k4.metric("TIROS (FGA) PROM.", f"{df_plot['FGA'].mean():.1f}")
+
+            # 4. GRÁFICO DE BARRAS VERDE / ROJO CON LÍNEA HORIZONTAL (Estilo Props.Cash)
+            colores = ['#00E676' if val > linea_eval else '#FF5252' for val in df_plot[col_activa]]
+            etiquetas_x = [f"{row['GAME_DATE'][:6]}<br>{row['MATCHUP'].split()[1]}{row['MATCHUP'].split()[2]}" for _, row in df_plot.iterrows()]
+
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=etiquetas_x,
+                y=df_plot[col_activa],
+                marker_color=colores,
+                text=df_plot[col_activa],
+                textposition='inside',
+                insidetextanchor='start',
+                textfont=dict(color='white', size=15, family='Arial Black'),
+                hovertemplate="<b>%{x}</b><br>Valor: %{y}<extra></extra>"
+            ))
+
+            # Línea punteada horizontal de referencia
+            fig.add_hline(
+                y=linea_eval,
+                line_dash="dash",
+                line_color="white",
+                line_width=2,
+                annotation_text=f"Línea: {linea_eval}",
+                annotation_position="top left",
+                annotation_font=dict(color="white", size=12)
+            )
+
+            fig.update_layout(
+                template="plotly_dark",
+                paper_bgcolor="#0E1117",
+                plot_bgcolor="#0E1117",
+                height=360,
+                margin=dict(l=20, r=20, t=30, b=40),
+                xaxis=dict(showgrid=False, tickfont=dict(size=11)),
+                yaxis=dict(showgrid=True, gridcolor="#262730", zeroline=False),
+                showlegend=False
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # 5. FILA DE PORCENTAJES HISTÓRICOS (26/27, H2H, L5, L10, L20)
+            def calc_pct(serie):
+                return f"{(serie > linea_eval).mean() * 100:.0f}%" if len(serie) > 0 else "-"
+
+            p_temp = calc_pct(df_nba[col_activa])
+            p_l5 = calc_pct(df_nba[col_activa].head(5))
+            p_l10 = calc_pct(df_nba[col_activa].head(10))
+            p_l20 = calc_pct(df_nba[col_activa].head(20))
+            df_h2h = df_nba[df_nba['Rival'] == filtro_rival] if filtro_rival != "Todos" else pd.DataFrame()
+            p_h2h = calc_pct(df_h2h[col_activa]) if not df_h2h.empty else "Elige rival"
+
+            st.markdown("##### 📊 Resumen de Tendencias (Hit Rate)")
+            t1, t2, t3, t4, t5 = st.columns(5)
+            t1.metric("Temp. 26/27", p_temp)
+            t2.metric("H2H Rival", p_h2h)
+            t3.metric("L5", p_l5)
+            t4.metric("L10", p_l10)
+            t5.metric("L20", p_l20)
+
+            # 6. TABLA DETALLADA DESPLEGABLE (Pestaña "Tabla" de la imagen)
+            with st.expander("📋 Ver Tabla Detallada de Partidos"):
+                cols_t = ['GAME_DATE', 'MATCHUP', 'WL', 'MIN', 'PTS', 'REB', 'AST', 'FG3M', 'STL', 'FGA', 'PRA']
+                st.dataframe(df_plot.iloc[::-1][cols_t], use_container_width=True, hide_index=True)
 
 with tab_futbol:
     st.subheader("⚽ Estadísticas de Goles en Primera Mitad (1T)")

@@ -106,7 +106,13 @@ with tab_nba:
         except Exception:
             # Respaldo automático con ESPN API si ://nba.com bloquea la IP de la nube
             import requests
-            busq = requests.get(f"https://espn.com{nombre_jugador}&limit=3&type=player", timeout=10).json()
+            dom_espn = "site.web.api." + "espn.com"
+            ruta_busq = "/apis/common/v3/search"
+            busq = requests.get(
+                f"https://{dom_espn}{ruta_busq}",
+                params={"query": nombre_jugador, "limit": 3, "type": "player"},
+                timeout=10
+            ).json()
             espn_id = None
             for item in busq.get("items", []):
                 if item.get("league") == "nba":
@@ -115,9 +121,9 @@ with tab_nba:
             if not espn_id:
                 return pd.DataFrame(), "NBA", ""
                 
-            gamelog_url = f"https://espn.com{espn_id}/gamelog"
-            gl = requests.get(gamelog_url, timeout=10).json()
-            
+            ruta_gl = f"/apis/common/v3/sports/basketball/nba/athletes/{espn_id}/gamelog"
+            gl = requests.get(f"https://{dom_espn}{ruta_gl}", timeout=10).json()
+           
             eventos_dict = gl.get("events", {})
             filas = []
             for st_type in gl.get("seasonTypes", []):

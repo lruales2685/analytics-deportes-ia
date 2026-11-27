@@ -86,19 +86,66 @@ with tab_nba:
     pid = info_jugador['id']
 
     @st.cache_data(ttl=3600)
-    def obtener_datos_completos_nba(player_id):
-        log = playergamelog.PlayerGameLog(player_id=player_id, timeout=15)
-        df = log.get_data_frames()[0]
+    def obtener_datos_completos_nba(player_id, nombre_jugador):
+        cabeceras_nba = {
+            'Host': '://nba.com',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Referer': 'https://nba.com',
+            'Origin': 'https://nba.com',
+            'Connection': 'keep-alive'
+        }
         try:
-            info = commonplayerinfo.CommonPlayerInfo(player_id=player_id, timeout=10).get_data_frames()[0]
+            log = playergamelog.PlayerGameLog(player_id=player_id, headers=cabeceras_nba, timeout=12)
+            df = log.get_data_frames()[0]
+            info = commonplayerinfo.CommonPlayerInfo(player_id=player_id, headers=cabeceras_nba, timeout=10).get_data_frames()[0]
             equipo = f"{info['TEAM_CITY'].iloc[0]} {info['TEAM_NAME'].iloc[0]}"
             pos = info['POSITION'].iloc[0]
+            return df, equipo, pos
         except Exception:
-            equipo, pos = "NBA", ""
-        return df, equipo, pos
+            # Respaldo automático con ESPN API si ://nba.com bloquea la IP de la nube
+            import requests
+            busq = requests.get(f"https://espn.com{nombre_jugador}&limit=3&type=player", timeout=10).json()
+            espn_id = None
+            for item in busq.get("items", []):
+                if item.get("league") == "nba":
+                    espn_id = item.get("id")
+                    break
+            if not espn_id:
+                return pd.DataFrame(), "NBA", ""
+                
+            gamelog_url = f"https://espn.com{espn_id}/gamelog"
+            gl = requests.get(gamelog_url, timeout=10).json()
+            
+            eventos_dict = gl.get("events", {})
+            filas = []
+            for st_type in gl.get("seasonTypes", []):
+                for cat in st_type.get("categories", []):
+                    for ev in cat.get("events", []):
+                        eid = ev.get("eventId")
+                        stats = ev.get("stats", [])
+                        info_ev = eventos_dict.get(eid, {})
+                        if len(stats) >= 14:
+                            # Orden estándar ESPN: MIN, FG, FG%, 3PT, 3P%, FT, FT%, REB, AST, BLK, STL, PF, TO, PTS
+                            triples = int(str(stats[3]).split('-')[0]) if '-' in str(stats[3]) else 0
+                            fga = int(str(stats[1]).split('-')[1]) if '-' in str(stats[1]) else 0
+                            filas.append({
+                                "GAME_DATE": info_ev.get("gameDate", "")[:10],
+                                "MATCHUP": f"{info_ev.get('atVs', 'vs')} {info_ev.get('opponent', {}).get('abbreviation', '')}",
+                                "WL": info_ev.get("gameResult", ""),
+                                "MIN": int(float(stats[0])) if str(stats[0]).replace('.', '').isdigit() else 0,
+                                "PTS": int(float(stats[13])),
+                                "REB": int(float(stats[7])),
+                                "AST": int(float(stats[8])),
+                                "FG3M": triples,
+                                "STL": int(float(stats[10])),
+                                "FGA": fga
+                            })
+            return pd.DataFrame(filas), "NBA", ""
 
     with st.spinner(f"Cargando perfil gráfico de {seleccionado}..."):
-        df_nba, equipo_jug, pos_jug = obtener_datos_completos_nba(pid)
+        df_nba, equipo_jug, pos_jug = obtener_datos_completos_nba(pid, seleccionado)
 
     if df_nba.empty:
         st.warning("Este jugador aún no registra partidos en la temporada 2026-27.")

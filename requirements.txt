@@ -1,0 +1,6 @@
+streamlit
+pandas
+nba_api
+google-genai
+requests
+openpyxl
